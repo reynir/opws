@@ -90,12 +90,16 @@ let cursor_getshort cur =
   let b = cursor_getchar cur in
   Bin.unpack16_le (sprintf "%c%c" a b)
 
-let cursor_gettime cur =
+(* FIXME: possible loss of precision etc *)
+let cursor_getint32 cur =
   let a = cursor_getchar cur in
   let b = cursor_getchar cur in
   let c = cursor_getchar cur in
   let d = cursor_getchar cur in
   Bin.unpack32_le (sprintf "%c%c%c%c" a b c d)
+
+let cursor_gettime cur =
+  cursor_getint32 cur
 
 let cursor_gets cur = function
   | 0 -> ""
@@ -107,12 +111,14 @@ let cursor_gets cur = function
       in
       loop length
 
+type time = int
+
 type header =
   | Version of int
   | Header_UUID of string
   | Non_default_preferences of string
   | Tree_display_status of string
-  | Timestamp_of_last_save of int
+  | Timestamp_of_last_save of time
   | Who_performed_last_save of string
   | What_performed_last_save of string
   | Last_saved_by_user of string
@@ -120,7 +126,17 @@ type header =
   | Database_name of string
   | Database_description of string
   | Database_filters of string
+  | Reserved_0x0c of string
+  | Reserved_0x0d of string
+  | Reserved_0x0e of string
+  | Recently_used_entries of string
+  | Named_password_policies of string
+  | Empty_groups of string
+  | Yubico of string
   | End_of_header
+  (* 4.1: Impl. should not discard or report an error when encountering a field
+   * of an unknown type *)
+  | Unknown_header of (int * string )
 
 type record =
   | Record_UUID of string
@@ -129,18 +145,29 @@ type record =
   | Username of string
   | Notes of string
   | Password of string
-  | Creation_time of int
-  | Password_modification_time of int
-  | Last_access_time of int
-  | Password_expiry_time of int
+  | Creation_time of time
+  | Password_modification_time of time
+  | Last_access_time of time
+  | Password_expiry_time of time
   | Reserved of string
-  | Last_modification_time of int
+  | Last_modification_time of time
   | URL of string
   | Autotype of string
   | Password_history of string
   | Password_policy of string
   | Password_expiry_interval of int
+  | Run_command of string
+  | Double_click_action of int
+  | EMail_address of string
+  | Protected_entry of bool
+  | Own_symbols_for_password of string
+  | Shift_double_click_action of int
+  | Password_policy_name of string
+  | Entry_keyboard_shortcut of int
   | End_of_record
+  (* 4.1: Impl. should not discard or report an error when encountering a field
+   * of an unknown type *)
+  | Unknown_record of (int * string)
 
 let header_of_code cur length = function
   | 0x00 -> (assert (length = 2); Version (cursor_getshort cur))
@@ -155,8 +182,15 @@ let header_of_code cur length = function
   | 0x09 -> Database_name (cursor_gets cur length)
   | 0x0a -> Database_description (cursor_gets cur length)
   | 0x0b -> Database_filters (cursor_gets cur length)
+  | 0x0c -> Reserved_0x0c (cursor_gets cur length)
+  | 0x0d -> Reserved_0x0d (cursor_gets cur length)
+  | 0x0e -> Reserved_0x0e (cursor_gets cur length)
+  | 0x0f -> Recently_used_entries (cursor_gets cur length)
+  | 0x10 -> Named_password_policies (cursor_gets cur length)
+  | 0x11 -> Empty_groups (cursor_gets cur length)
+  | 0x12 -> Yubico (cursor_gets cur length)
   | 0xff -> End_of_header
-  | code -> (failwith ("header_of_code: unknown code: "^(string_of_int code)))
+  | code -> Unknown_header (code, cursor_gets cur length)
 
 let entry_of_code cur length = function
   | 0x01 -> (assert (length = 16); Record_UUID (cursor_gets cur 16))
@@ -175,9 +209,18 @@ let entry_of_code cur length = function
   | 0x0e -> Autotype (cursor_gets cur length)
   | 0x0f -> Password_history (cursor_gets cur length)
   | 0x10 -> Password_policy (cursor_gets cur length)
-  | 0x11 -> (assert (length = 2); Password_expiry_interval (cursor_getshort cur))
+  (* NOTE: It's 4 bytes, but cursor_getshort should probably still work *)
+  | 0x11 -> (assert (length = 4); Password_expiry_interval (cursor_getshort cur))
+  | 0x12 -> Run_command (cursor_gets cur length)
+  | 0x13 -> assert (length = 2); Double_click_action (cursor_getshort cur)
+  | 0x14 -> EMail_address (cursor_gets cur length)
+  | 0x15 -> Protected_entry (cursor_getchar cur != '\000')
+  | 0x16 -> Own_symbols_for_password (cursor_gets cur length)
+  | 0x17 -> assert (length = 2); Shift_double_click_action (cursor_getshort cur)
+  | 0x18 -> Password_policy_name (cursor_gets cur length)
+  | 0x19 -> Entry_keyboard_shortcut (cursor_getint32 cur)
   | 0xFF -> End_of_record
-  | code -> (failwith ("entry_of_code: unknown code: "^(string_of_int code)))
+  | code -> Unknown_record (code, cursor_gets cur length)
 
 
 (*
@@ -332,17 +375,29 @@ let format_field = function
   | Notes notes       -> "Notes: "^notes^"\n"
   | URL url           -> "URL: "^url^"\n"
   | Autotype autotype -> "Autotype: "^autotype^"\n"
-  | Password_expiry_interval _
-  | Password_policy _
-  | Password_history _
-  | Last_modification_time _
-  | Reserved _
-  | Password_expiry_time _
-  | Last_access_time _
-  | Password_modification_time _
-  | Creation_time _
   | Record_UUID _ 
+  | Creation_time _
+  | Password_modification_time _
+  | Last_access_time _
+  | Password_expiry_time _
+  | Reserved _
+  | Last_modification_time _
+  | Password_history _
+  | Password_policy _
+  | Password_expiry_interval _
+  | Run_command _
+  | Double_click_action _
+  | EMail_address _
+  | Protected_entry _
+  | Own_symbols_for_password _
+  | Shift_double_click_action _
+  | Password_policy_name _
+  | Entry_keyboard_shortcut _
   | End_of_record -> ""
+  | Unknown_record (code, data) -> if true (* debug *)
+  then "Unknown record " ^ string_of_int code ^ ": "
+  ^ String.escaped data ^ "\n"
+  else ""
 ;;
 
 let rec dump_fields = function
