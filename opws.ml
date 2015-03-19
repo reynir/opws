@@ -337,8 +337,7 @@ let make_keys ch p' =
   let joinkeys = join (Twofish.init p') in
   let k = joinkeys ch.b1 ch.b2 in
   let l = joinkeys ch.b3 ch.b4 in
-  let iv = ch.iv in
-  (k, l, iv)
+  (k, l)
 
 let load_database fn passphrase =
   let chan = open_in_gen [Open_binary] 0 fn in
@@ -349,7 +348,7 @@ let load_database fn passphrase =
     let p' = keystretch b_passphrase b_salt ch.iter in       
     let hofp' = Sha256.digest p' in
     if (buffer_of_string ch.hofp) = hofp' then
-      let (k, l, iv) = make_keys ch (Buffer.contents p') in
+      let (k, l) = make_keys ch (Buffer.contents p') in
       let hdrs,recs = decrypt_database k l ch chan in
       begin
         close_in chan;
